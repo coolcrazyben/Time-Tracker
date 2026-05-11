@@ -1,7 +1,7 @@
 /**
  * Unified database layer.
  * USE_SQLITE=true  → better-sqlite3 (local dev)
- * default          → @vercel/postgres (production)
+ * default          → @neondatabase/serverless (production)
  *
  * All SQL is written in Postgres syntax ($1, $2 …).
  * pgToSQLite() rewrites placeholders to ? for SQLite.
@@ -60,47 +60,70 @@ function getSQLite(): import('better-sqlite3').Database {
 
 type Scalar = string | number | null
 
+// ─── Neon (production) helpers ────────────────────────────────────────────────
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function pgQuery<T = any>(sql: string, params: Scalar[]): Promise<T[]> {
-  const { db } = await import('@vercel/postgres')
-  const client = await db.connect()
-  try {
-    // Cast through unknown to avoid QueryResultRow constraint mismatch
-    const result = await (client as unknown as { query(s: string, p: Scalar[]): Promise<{ rows: T[] }> }).query(sql, params)
-    return result.rows
-  } finally {
-    client.release()
+let _neonSql: ((...args: any[]) => Promise<any>) | null = null
+
+function getNeonSql() {
+  if (_neonSql) return _neonSql
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { neon } = require('@neondatabase/serverless')
+  const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRES_URL
+  if (!connectionString) {
+    throw new Error(
+      'No database connection string found. ' +
+      'Set DATABASE_URL (or POSTGRES_URL) in your Vercel project environment variables, ' +
+      'or set USE_SQLITE=true for local development.'
+    )
   }
+  _neonSql = neon(connectionString)
+  return _neonSql!
 }
 
-async function pgEnsureTables(): Promise<void> {
-  const { db } = await import('@vercel/postgres')
-  const client = await db.connect()
-  try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS time_sessions (
-        id         SERIAL PRIMARY KEY,
-        start_time TIMESTAMPTZ NOT NULL,
-        end_time   TIMESTAMPTZ,
-        label      TEXT,
-        notes      TEXT
-      );
-      CREATE TABLE IF NOT EXISTS drive_sessions (
-        id          SERIAL PRIMARY KEY,
-        start_time  TIMESTAMPTZ NOT NULL,
-        end_time    TIMESTAMPTZ,
-        destination TEXT NOT NULL
-      );
-    `)
-  } finally {
-    client.release()
-  }
+/**
+ * Convert "SELECT … WHERE id = $1" + [val] into the
+ * (TemplateStringsArray, ...values) form that neon() tagged-template expects.
+ *
+ * Tagged template `sql\`…${v}…\`` desugars to sql(['…','…'], v),
+ * so we split on $1/$2/… placeholders and spread the params.
+ */
+function toTemplate(sqlText: string, params: Scalar[]): [TemplateStringsArray, ...Scalar[]] {
+  const parts = sqlText.split(/\$\d+/)
+  const strings = Object.assign([...parts], { raw: [...parts] }) as TemplateStringsArray
+  return [strings, ...params]
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function pgQuery<T = any>(sqlText: string, params: Scalar[]): Promise<T[]> {
+  const sql = getNeonSql()
+  const [strings, ...values] = toTemplate(sqlText, params)
+  const rows = await sql(strings, ...values)
+  return rows as T[]
 }
 
 let pgInitDone = false
 async function ensurePgTables() {
   if (pgInitDone) return
-  await pgEnsureTables()
+  const sql = getNeonSql()
+  // Use tagged template directly — no dynamic params needed here
+  await sql`
+    CREATE TABLE IF NOT EXISTS time_sessions (
+      id         SERIAL PRIMARY KEY,
+      start_time TIMESTAMPTZ NOT NULL,
+      end_time   TIMESTAMPTZ,
+      label      TEXT,
+      notes      TEXT
+    )
+  `
+  await sql`
+    CREATE TABLE IF NOT EXISTS drive_sessions (
+      id          SERIAL PRIMARY KEY,
+      start_time  TIMESTAMPTZ NOT NULL,
+      end_time    TIMESTAMPTZ,
+      destination TEXT NOT NULL
+    )
+  `
   pgInitDone = true
 }
 
@@ -122,8 +145,9 @@ async function insert(sql: string, params: Scalar[] = []): Promise<number> {
     return Number(info.lastInsertRowid)
   }
   await ensurePgTables()
+  // Neon returns the rows array directly from tagged-template calls
   const rows = await pgQuery<{ id: number }>(`${sql} RETURNING id`, params)
-  return rows[0].id
+  return Number(rows[0].id)
 }
 
 // Generic UPDATE/DELETE — no return value needed
