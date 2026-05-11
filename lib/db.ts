@@ -20,7 +20,10 @@ export type DriveSession = {
   start_time: string
   end_time: string | null
   destination: string
+  route_data: string | null
 }
+
+export type Waypoint = { lat: number; lng: number; ts: number }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -52,9 +55,12 @@ function getSQLite(): import('better-sqlite3').Database {
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       start_time  TEXT NOT NULL,
       end_time    TEXT,
-      destination TEXT NOT NULL
+      destination TEXT NOT NULL,
+      route_data  TEXT
     );
   `)
+  // Migration: add route_data to existing tables that predate this column
+  try { _sqlite.exec(`ALTER TABLE drive_sessions ADD COLUMN route_data TEXT`) } catch { /* already exists */ }
   return _sqlite
 }
 
@@ -121,9 +127,11 @@ async function ensurePgTables() {
       id          SERIAL PRIMARY KEY,
       start_time  TIMESTAMPTZ NOT NULL,
       end_time    TIMESTAMPTZ,
-      destination TEXT NOT NULL
+      destination TEXT NOT NULL,
+      route_data  TEXT
     )
   `
+  await sql`ALTER TABLE drive_sessions ADD COLUMN IF NOT EXISTS route_data TEXT`
   pgInitDone = true
 }
 
@@ -261,13 +269,13 @@ export async function startDrive(destination: string): Promise<DriveSession> {
     'INSERT INTO drive_sessions (start_time, destination) VALUES ($1, $2)',
     [now, destination]
   )
-  return { id, start_time: now, end_time: null, destination }
+  return { id, start_time: now, end_time: null, destination, route_data: null }
 }
 
-export async function stopDrive(id: number): Promise<void> {
+export async function stopDrive(id: number, routeData?: string | null): Promise<void> {
   await mutate(
-    'UPDATE drive_sessions SET end_time = $1 WHERE id = $2',
-    [new Date().toISOString(), id]
+    'UPDATE drive_sessions SET end_time = $1, route_data = $2 WHERE id = $3',
+    [new Date().toISOString(), routeData ?? null, id]
   )
 }
 

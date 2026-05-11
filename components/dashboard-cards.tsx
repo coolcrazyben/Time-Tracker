@@ -86,10 +86,15 @@ export function DashboardCards({ initialSession, initialDrive, initialStats }: D
         )}
       </div>
 
-      {/* Action buttons */}
-      <div className="flex flex-col sm:flex-row items-center justify-center gap-8 sm:gap-16">
+      {/* Action buttons — stack vertically when map is visible */}
+      <div className={drive
+        ? 'flex flex-col items-center gap-6 w-full'
+        : 'flex flex-col sm:flex-row items-center justify-center gap-8 sm:gap-16'
+      }>
         <ClockButton activeSession={session} onSessionChange={refreshSession} />
-        <DriveButton activeDrive={drive} onDriveChange={refreshDrive} />
+        <div className={drive ? 'w-full' : ''}>
+          <DriveButton activeDrive={drive} onDriveChange={refreshDrive} />
+        </div>
       </div>
 
       {/* Summary cards */}

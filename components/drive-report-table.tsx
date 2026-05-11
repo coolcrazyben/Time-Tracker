@@ -1,9 +1,16 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Download } from 'lucide-react'
+import dynamic from 'next/dynamic'
+import { Download, MapPin } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { WeekNav } from '@/components/week-nav'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
 } from '@/components/ui/table'
@@ -13,12 +20,19 @@ import {
   elapsedSeconds,
   getWeekRange,
 } from '@/lib/utils'
-import type { DriveSession } from '@/lib/db'
+import type { DriveSession, Waypoint } from '@/lib/db'
+
+// Leaflet must never run on the server
+const RouteViewMap = dynamic(
+  () => import('@/components/route-view-map').then((m) => m.RouteViewMap),
+  { ssr: false }
+)
 
 export function DriveReportTable() {
   const [weekStart, setWeekStart] = useState(() => getWeekRange().start)
   const [drives, setDrives] = useState<DriveSession[]>([])
   const [loading, setLoading] = useState(true)
+  const [routeDrive, setRouteDrive] = useState<DriveSession | null>(null)
 
   const load = useCallback(async (ws: string) => {
     setLoading(true)
@@ -51,6 +65,14 @@ export function DriveReportTable() {
     return acc + (d.end_time ? elapsedSeconds(d.start_time, d.end_time) : 0)
   }, 0)
 
+  // Parse route_data JSON once — returns [] if missing or invalid
+  const parseRoute = (d: DriveSession): Waypoint[] => {
+    if (!d.route_data) return []
+    try { return JSON.parse(d.route_data) } catch { return [] }
+  }
+
+  const routeWaypoints = routeDrive ? parseRoute(routeDrive) : []
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -75,11 +97,13 @@ export function DriveReportTable() {
                 <TableHead>End</TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead>Destination</TableHead>
+                <TableHead className="w-12" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {drives.map((d) => {
                 const dur = d.end_time ? elapsedSeconds(d.start_time, d.end_time) : null
+                const hasRoute = !!d.route_data
                 return (
                   <TableRow key={d.id}>
                     <TableCell className="whitespace-nowrap">
@@ -95,6 +119,19 @@ export function DriveReportTable() {
                       {dur != null ? formatDuration(dur) : '—'}
                     </TableCell>
                     <TableCell>{d.destination}</TableCell>
+                    <TableCell>
+                      {hasRoute && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-sky-400 hover:text-sky-300"
+                          onClick={() => setRouteDrive(d)}
+                          title="View route"
+                        >
+                          <MapPin className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </TableCell>
                   </TableRow>
                 )
               })}
@@ -107,6 +144,25 @@ export function DriveReportTable() {
           </p>
         </>
       )}
+
+      {/* Route viewer dialog */}
+      <Dialog open={!!routeDrive} onOpenChange={(open) => { if (!open) setRouteDrive(null) }}>
+        <DialogContent className="sm:max-w-lg p-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-3">
+            <DialogTitle className="text-base">
+              {routeDrive?.destination}
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {routeDrive && new Date(routeDrive.start_time).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              </span>
+            </DialogTitle>
+          </DialogHeader>
+          {routeWaypoints.length > 0 ? (
+            <RouteViewMap waypoints={routeWaypoints} />
+          ) : (
+            <p className="text-center text-muted-foreground py-16 text-sm">No route data for this drive.</p>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

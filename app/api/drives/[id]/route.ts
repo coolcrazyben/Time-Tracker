@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 
 // PATCH /api/drives/[id] — stop a drive
 export async function PATCH(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -14,7 +14,12 @@ export async function PATCH(
     if (isNaN(id)) {
       return NextResponse.json({ error: 'Invalid id' }, { status: 400 })
     }
-    await stopDrive(id)
+    let routeData: string | null = null
+    try {
+      const body = await req.json()
+      if (body?.route_data) routeData = body.route_data
+    } catch { /* no body or not JSON */ }
+    await stopDrive(id, routeData)
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('PATCH /api/drives/[id]', err)

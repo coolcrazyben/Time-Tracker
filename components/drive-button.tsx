@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useRef, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { Car, Square, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,7 +14,13 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { LiveTimer } from '@/components/live-timer'
-import type { DriveSession } from '@/lib/db'
+import type { DriveSession, Waypoint } from '@/lib/db'
+
+// Leaflet must never run on the server
+const DriveMap = dynamic(
+  () => import('@/components/drive-map').then((m) => m.DriveMap),
+  { ssr: false }
+)
 
 interface DriveButtonProps {
   activeDrive: DriveSession | null
@@ -26,9 +33,17 @@ export function DriveButton({ activeDrive, onDriveChange }: DriveButtonProps) {
   const [isPending, startTransition] = useTransition()
   const [destError, setDestError] = useState('')
 
+  // Waypoints are stored in a ref — no re-render needed on each GPS update
+  const waypointsRef = useRef<Waypoint[]>([])
+
+  const handleWaypointsChange = useCallback((waypoints: Waypoint[]) => {
+    waypointsRef.current = waypoints
+  }, [])
+
   const handleStartDrive = () => {
     setDestination('')
     setDestError('')
+    waypointsRef.current = []
     setDialogOpen(true)
   }
 
@@ -50,8 +65,17 @@ export function DriveButton({ activeDrive, onDriveChange }: DriveButtonProps) {
 
   const handleStopDrive = () => {
     if (!activeDrive) return
+    const routeData =
+      waypointsRef.current.length > 0
+        ? JSON.stringify(waypointsRef.current)
+        : null
     startTransition(async () => {
-      await fetch(`/api/drives/${activeDrive.id}`, { method: 'PATCH' })
+      await fetch(`/api/drives/${activeDrive.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ route_data: routeData }),
+      })
+      waypointsRef.current = []
       onDriveChange()
     })
   }
@@ -60,7 +84,7 @@ export function DriveButton({ activeDrive, onDriveChange }: DriveButtonProps) {
 
   return (
     <>
-      <div className="flex flex-col items-center gap-3">
+      <div className="flex flex-col items-center gap-3 w-full">
         <Button
           onClick={isDriving ? handleStopDrive : handleStartDrive}
           disabled={isPending}
@@ -94,6 +118,13 @@ export function DriveButton({ activeDrive, onDriveChange }: DriveButtonProps) {
               className="text-2xl font-mono font-semibold tabular-nums text-amber-400"
             />
             <p className="text-sm text-muted-foreground">{activeDrive.destination}</p>
+          </div>
+        )}
+
+        {/* Live map — only rendered while a drive is active */}
+        {isDriving && (
+          <div className="w-full mt-1">
+            <DriveMap onWaypointsChange={handleWaypointsChange} />
           </div>
         )}
       </div>
