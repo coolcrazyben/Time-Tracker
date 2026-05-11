@@ -16,7 +16,6 @@ import {
 import { LiveTimer } from '@/components/live-timer'
 import type { DriveSession, Waypoint } from '@/lib/db'
 
-// Leaflet must never run on the server
 const DriveMap = dynamic(
   () => import('@/components/drive-map').then((m) => m.DriveMap),
   { ssr: false }
@@ -32,18 +31,20 @@ export function DriveButton({ activeDrive, onDriveChange }: DriveButtonProps) {
   const [destination, setDestination] = useState('')
   const [isPending, startTransition] = useTransition()
   const [destError, setDestError] = useState('')
+  const [distanceMiles, setDistanceMiles] = useState(0)
 
-  // Waypoints are stored in a ref — no re-render needed on each GPS update
   const waypointsRef = useRef<Waypoint[]>([])
 
-  const handleWaypointsChange = useCallback((waypoints: Waypoint[]) => {
+  const handleWaypointsChange = useCallback((waypoints: Waypoint[], totalMeters: number) => {
     waypointsRef.current = waypoints
+    setDistanceMiles(totalMeters * 0.000621371)
   }, [])
 
   const handleStartDrive = () => {
     setDestination('')
     setDestError('')
     waypointsRef.current = []
+    setDistanceMiles(0)
     setDialogOpen(true)
   }
 
@@ -76,6 +77,7 @@ export function DriveButton({ activeDrive, onDriveChange }: DriveButtonProps) {
         body: JSON.stringify({ route_data: routeData }),
       })
       waypointsRef.current = []
+      setDistanceMiles(0)
       onDriveChange()
     })
   }
@@ -118,10 +120,14 @@ export function DriveButton({ activeDrive, onDriveChange }: DriveButtonProps) {
               className="text-2xl font-mono font-semibold tabular-nums text-amber-400"
             />
             <p className="text-sm text-muted-foreground">{activeDrive.destination}</p>
+            {distanceMiles >= 0.01 && (
+              <p className="text-sm font-medium text-amber-300">
+                {distanceMiles.toFixed(2)} mi
+              </p>
+            )}
           </div>
         )}
 
-        {/* Live map — only rendered while a drive is active */}
         {isDriving && (
           <div className="w-full mt-1">
             <DriveMap onWaypointsChange={handleWaypointsChange} />

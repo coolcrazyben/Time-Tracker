@@ -21,6 +21,7 @@ import {
   getWeekRange,
 } from '@/lib/utils'
 import type { DriveSession, Waypoint } from '@/lib/db'
+import { haversineM } from '@/components/drive-map'
 
 // Leaflet must never run on the server
 const RouteViewMap = dynamic(
@@ -65,10 +66,19 @@ export function DriveReportTable() {
     return acc + (d.end_time ? elapsedSeconds(d.start_time, d.end_time) : 0)
   }, 0)
 
-  // Parse route_data JSON once — returns [] if missing or invalid
   const parseRoute = (d: DriveSession): Waypoint[] => {
     if (!d.route_data) return []
     try { return JSON.parse(d.route_data) } catch { return [] }
+  }
+
+  const routeMiles = (d: DriveSession): number | null => {
+    const pts = parseRoute(d)
+    if (pts.length < 2) return null
+    let total = 0
+    for (let i = 1; i < pts.length; i++) {
+      total += haversineM(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng)
+    }
+    return total * 0.000621371
   }
 
   const routeWaypoints = routeDrive ? parseRoute(routeDrive) : []
@@ -96,6 +106,7 @@ export function DriveReportTable() {
                 <TableHead>Start</TableHead>
                 <TableHead>End</TableHead>
                 <TableHead>Duration</TableHead>
+                <TableHead>Distance</TableHead>
                 <TableHead>Destination</TableHead>
                 <TableHead className="w-12" />
               </TableRow>
@@ -117,6 +128,9 @@ export function DriveReportTable() {
                     </TableCell>
                     <TableCell className="tabular-nums whitespace-nowrap">
                       {dur != null ? formatDuration(dur) : '—'}
+                    </TableCell>
+                    <TableCell className="tabular-nums whitespace-nowrap">
+                      {(() => { const m = routeMiles(d); return m != null ? `${m.toFixed(2)} mi` : '—' })()}
                     </TableCell>
                     <TableCell>{d.destination}</TableCell>
                     <TableCell>

@@ -5,12 +5,11 @@ import type { Waypoint } from '@/lib/db'
 import 'leaflet/dist/leaflet.css'
 
 interface DriveMapProps {
-  onWaypointsChange: (waypoints: Waypoint[]) => void
+  onWaypointsChange: (waypoints: Waypoint[], totalMeters: number) => void
 }
 
 export function DriveMap({ onWaypointsChange }: DriveMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  // Keep callback in a ref so the effect never needs to re-run when it changes
   const callbackRef = useRef(onWaypointsChange)
   useEffect(() => { callbackRef.current = onWaypointsChange })
 
@@ -21,10 +20,11 @@ export function DriveMap({ onWaypointsChange }: DriveMapProps) {
     let currentMarker: import('leaflet').CircleMarker | null = null
     let watchId: number | null = null
 
+    // Store every GPS fix — the more the better for route accuracy
     const waypoints: Waypoint[] = []
+    let totalMeters = 0
     let lastLat: number | null = null
     let lastLng: number | null = null
-    let lastSampleMs = 0
 
     async function init() {
       const L = (await import('leaflet')).default
@@ -37,8 +37,6 @@ export function DriveMap({ onWaypointsChange }: DriveMapProps) {
       }).addTo(map)
 
       polyline = L.polyline([], { color: '#3b82f6', weight: 5, opacity: 0.85 }).addTo(map)
-
-      // Default center while waiting for first GPS fix
       map.setView([39.5, -98.35], 5)
 
       if (!navigator.geolocation) return
@@ -46,35 +44,32 @@ export function DriveMap({ onWaypointsChange }: DriveMapProps) {
       watchId = navigator.geolocation.watchPosition(
         (pos) => {
           const { latitude: lat, longitude: lng } = pos.coords
-          const now = Date.now()
+          const ts = Date.now()
 
-          // Sample if: first point, moved >10 m, or >15 s since last sample
-          const dist = lastLat !== null ? haversineM(lastLat, lastLng!, lat, lng) : Infinity
-          const shouldSample = waypoints.length === 0 || dist > 10 || (now - lastSampleMs) > 15_000
+          // Skip exact duplicates (same fix served twice)
+          if (lat === lastLat && lng === lastLng) return
 
-          if (shouldSample && waypoints.length < 1000) {
-            waypoints.push({ lat, lng, ts: now })
-            lastLat = lat
-            lastLng = lng
-            lastSampleMs = now
-            callbackRef.current([...waypoints])
+          // Accumulate distance before pushing the new point
+          if (lastLat !== null) {
+            totalMeters += haversineM(lastLat, lastLng!, lat, lng)
           }
 
-          // Update polyline
+          if (waypoints.length < 2000) {
+            waypoints.push({ lat, lng, ts })
+          }
+          lastLat = lat
+          lastLng = lng
+
+          callbackRef.current([...waypoints], totalMeters)
+
+          // Draw every point so the route follows the road
           polyline.setLatLngs(waypoints.map(w => [w.lat, w.lng] as [number, number]))
 
-          // Move/place current-position marker
+          // Move or place the current-position marker
           if (currentMarker) {
             currentMarker.setLatLng([lat, lng])
           } else {
-            currentMarker = L.circleMarker([lat, lng], {
-              radius: 9,
-              color: '#fff',
-              fillColor: '#3b82f6',
-              fillOpacity: 1,
-              weight: 2.5,
-            }).addTo(map)
-            // Place start dot (green) on first fix
+            // Green start dot
             L.circleMarker([lat, lng], {
               radius: 7,
               color: '#fff',
@@ -82,14 +77,22 @@ export function DriveMap({ onWaypointsChange }: DriveMapProps) {
               fillOpacity: 1,
               weight: 2,
             }).addTo(map)
+            // Blue current-position dot
+            currentMarker = L.circleMarker([lat, lng], {
+              radius: 9,
+              color: '#fff',
+              fillColor: '#3b82f6',
+              fillOpacity: 1,
+              weight: 2.5,
+            }).addTo(map)
             map.setView([lat, lng], 16)
           }
 
-          // Keep current position in view
           map.panTo([lat, lng], { animate: true, duration: 0.5 })
         },
         (err) => console.warn('GPS error:', err.message),
-        { enableHighAccuracy: true, maximumAge: 5_000, timeout: 30_000 }
+        // maximumAge: 0 → always request a fresh fix, never serve cached coords
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 60_000 }
       )
     }
 
@@ -99,7 +102,7 @@ export function DriveMap({ onWaypointsChange }: DriveMapProps) {
       if (watchId !== null) navigator.geolocation.clearWatch(watchId)
       map?.remove()
     }
-  }, []) // intentionally empty — callback changes are handled via callbackRef
+  }, [])
 
   return (
     <div className="rounded-xl overflow-hidden border border-border shadow-md">
@@ -108,7 +111,7 @@ export function DriveMap({ onWaypointsChange }: DriveMapProps) {
   )
 }
 
-function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
+export function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6_371_000
   const toRad = (d: number) => (d * Math.PI) / 180
   const dLat = toRad(lat2 - lat1)
